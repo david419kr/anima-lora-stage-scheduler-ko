@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.python-version
+venv/
+runtime/
+.DS_Store
+Thumbs.db
+*.log
+custom_resolutions.json
+prompt_tag_manager_data/
