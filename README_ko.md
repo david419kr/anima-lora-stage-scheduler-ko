@@ -29,6 +29,7 @@ Anima LoRA 단계 스케줄러는 Anima LoRA가 샘플링 과정에서 영향을
    - Anima LoRA 자동 감지: Anima로 감지된 LoRA에만 적용합니다.
    - 프롬프트의 모든 LoRA: 프롬프트 안의 모든 LoRA 태그에 적용합니다.
    - 대상 목록만: 대상 필드에 입력한 이름에만 적용합니다.
+   - 대상 목록 제외: 대상 필드에 입력한 이름만 빼고 프롬프트 LoRA에 적용합니다.
 3. `style-stage`, `composition-stage`, `character-feature-stage` 같은 템플릿을 선택합니다.
 4. 일반적인 Anima/DiT 작업에서는 **Shift 기준 자동 타이밍**을 켜 둡니다.
 5. 평소처럼 생성하면 확장이 샘플링 중 LoRA patch 강도를 조절합니다.

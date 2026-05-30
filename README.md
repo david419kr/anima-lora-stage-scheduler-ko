@@ -29,6 +29,7 @@ Anima LoRA Stage Scheduler is a Forge/WebUI extension for controlling when Anima
    - Auto-detect Anima LoRA: apply to detected Anima LoRAs.
    - All LoRAs in prompt: apply to every LoRA tag in the prompt.
    - Target list only: apply only to names listed in the target field.
+   - Exclude target list: apply to every prompt LoRA except names listed in the target field.
 3. Select a template such as style-stage, composition-stage, or character-feature-stage.
 4. Keep **Auto timing from Shift** enabled for normal Anima/DiT workflows.
 5. Generate as usual. The extension adjusts LoRA patch strength at sampling time.

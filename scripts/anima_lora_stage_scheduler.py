@@ -30,7 +30,7 @@ LANG = {
         "target_scope": "Target scope",
         "panel_weight": "Panel weight, 0 = use prompt / layer-weight plugin",
         "target_lora": "Target LoRA",
-        "target_lora_placeholder": "Fill only when target scope is target list; separate multiple names with commas or new lines",
+        "target_lora_placeholder": "Fill when target scope uses the target list; separate multiple names with commas or new lines",
         "template": "Template",
         "copy": "Copy",
         "builder": "Preset combo",
@@ -111,7 +111,7 @@ LANG = {
         "target_scope": "대상 범위",
         "panel_weight": "패널 가중치, 0 = 프롬프트 / 레이어 가중치 플러그인 사용",
         "target_lora": "대상 LoRA",
-        "target_lora_placeholder": "대상 범위가 대상 목록일 때만 입력; 여러 이름은 쉼표나 줄바꿈으로 구분",
+        "target_lora_placeholder": "대상 범위가 대상 목록을 사용할 때 입력; 여러 이름은 쉼표나 줄바꿈으로 구분",
         "template": "템플릿",
         "copy": "복사",
         "builder": "프리셋 조합",
@@ -324,17 +324,20 @@ LEGACY_QWEN_ADAPTER_BLOCK_RE = re.compile(r"(?:^|\.)(?:diffusion_model\.)?llm_ad
 MODE_AUTO_ANIMA = "auto-anima"
 MODE_PROMPT_ALL = "prompt-all"
 MODE_TARGETS = "targets"
-TARGET_MODE_CHOICES = [MODE_AUTO_ANIMA, MODE_PROMPT_ALL, MODE_TARGETS]
+MODE_EXCLUDE_TARGETS = "exclude-targets"
+TARGET_MODE_CHOICES = [MODE_AUTO_ANIMA, MODE_PROMPT_ALL, MODE_TARGETS, MODE_EXCLUDE_TARGETS]
 TARGET_MODE_LABELS = {
     "en": {
         MODE_AUTO_ANIMA: "Auto-detect Anima LoRA",
         MODE_PROMPT_ALL: "All LoRAs in prompt",
         MODE_TARGETS: "Target list only",
+        MODE_EXCLUDE_TARGETS: "Exclude target list",
     },
     "ko": {
         MODE_AUTO_ANIMA: "Anima LoRA 자동 감지",
         MODE_PROMPT_ALL: "프롬프트의 모든 LoRA",
         MODE_TARGETS: "대상 목록만",
+        MODE_EXCLUDE_TARGETS: "대상 목록 제외",
     },
 }
 TARGET_MODE_ALIASES = {item: item for item in TARGET_MODE_CHOICES}
@@ -1803,9 +1806,9 @@ class PassConfig:
         if self.target_mode == MODE_PROMPT_ALL:
             return True
         if self.target_mode == MODE_TARGETS:
-            name = _normalize_name(lora_name)
-            names = {name, Path(name).name.lower(), Path(name).stem.lower()}
-            return bool(names & self.targets)
+            return bool(_parse_targets(lora_name) & self.targets)
+        if self.target_mode == MODE_EXCLUDE_TARGETS:
+            return not bool(_parse_targets(lora_name) & self.targets)
 
         filename = _resolve_lora_filename(lora_name)
         return _is_anima_lora_file(filename)
@@ -1816,6 +1819,10 @@ class PassConfig:
             return bool(names & self.prompt_names) if self.prompt_names else True
         if self.target_mode == MODE_TARGETS:
             return bool(names & self.targets)
+        if self.target_mode == MODE_EXCLUDE_TARGETS:
+            if names & self.targets:
+                return False
+            return bool(names & self.prompt_names) if self.prompt_names else True
         return _is_anima_lora_file(filename)
 
 
