@@ -623,7 +623,12 @@ for alias_map, target_map in [
 _ACTIVE_STATE = None
 _ORIGINAL_ADD_PATCHES = None
 _ORIGINAL_EXTRA_NETWORKS_ACTIVATE = None
+_ORIGINAL_LOAD_LORA_FOR_MODELS = None
+_ORIGINAL_INT8_PATCH_WEIGHT_TO_DEVICE = None
+_ORIGINAL_INT8_LINEAR_FORWARD = None
+_ORIGINAL_INT8_PROCESS_ONLINE_LORAS = None
 _CFG_CALLBACK_REGISTERED = False
+_COMPILE_IMPORT_ALIAS_REGISTERED = False
 
 
 def _clamp(value, low, high):
@@ -658,10 +663,16 @@ def _parse_targets(text) -> set[str]:
         name = _normalize_name(part)
         if not name:
             continue
-        targets.add(name)
-        path = Path(name)
-        targets.add(path.name.lower())
-        targets.add(path.stem.lower())
+        names = {name}
+        match = LORA_TAG_RE.fullmatch(name)
+        if match:
+            names.add(_normalize_name(match.group(1)))
+
+        for item in names:
+            targets.add(item)
+            path = Path(item)
+            targets.add(path.name.lower())
+            targets.add(path.stem.lower())
     return {x for x in targets if x}
 
 
@@ -1808,15 +1819,45 @@ class PassConfig:
         return _is_anima_lora_file(filename)
 
 
-class ScheduledStrength:
-    def __init__(self, base_strength, config: PassConfig, pass_name: str):
-        self.base_strength = _to_float(base_strength, 1.0)
+class FactorGroup:
+    def __init__(self, config: PassConfig, pass_name: str):
         self.config = config
         self.pass_name = pass_name
-        self.factor = 1.0
+        self.value = 1.0
+        self._last_key = None
+        self._last_value = 1.0
+
+    def set_value(self, value: float):
+        self.value = _to_float(value, 1.0)
+        self._last_key = None
+
+    def update(self, active_pass: str, sampling_step, total_sampling_steps):
+        if self.pass_name != active_pass:
+            self.value = 0.0
+            return
+
+        key = (sampling_step, total_sampling_steps)
+        if key != self._last_key:
+            self._last_key = key
+            self._last_value = _stage_curve_factor(self.config, sampling_step, total_sampling_steps)
+        self.value = self._last_value
+
+
+class ScheduledStrength:
+    def __init__(self, base_strength, factor_group: FactorGroup):
+        self.base_strength = _to_float(base_strength, 1.0)
+        self.factor_group = factor_group
+
+    @property
+    def config(self) -> PassConfig:
+        return self.factor_group.config
+
+    @property
+    def pass_name(self) -> str:
+        return self.factor_group.pass_name
 
     def value(self) -> float:
-        return float(self.base_strength) * float(self.factor)
+        return float(self.base_strength) * float(self.factor_group.value)
 
     def __float__(self):
         return self.value()
@@ -1855,9 +1896,9 @@ class RuntimeState:
     hires: PassConfig
     hr_disable_mode: str
     hr_disable_tags: list[str]
-    original_online_lora: bool
     current_activation_pass: str | None = None
     wrappers: list[ScheduledStrength] = field(default_factory=list)
+    factor_groups: dict[tuple[str, int], FactorGroup] = field(default_factory=dict)
     warned_offline: bool = False
 
     def current_config(self) -> PassConfig:
@@ -1876,9 +1917,21 @@ class RuntimeState:
     def register(self, wrapper: ScheduledStrength):
         self.wrappers.append(wrapper)
 
+    def factor_group(self, pass_name: str, config: PassConfig) -> FactorGroup:
+        key = (pass_name, id(config))
+        group = self.factor_groups.get(key)
+        if group is None:
+            group = FactorGroup(config, pass_name)
+            self.factor_groups[key] = group
+        return group
+
     def set_factor(self, factor: float):
-        for wrapper in self.wrappers:
-            wrapper.factor = factor
+        for group in self.factor_groups.values():
+            group.set_value(factor)
+
+    def update_factor_groups(self, pass_name: str, sampling_step, total_sampling_steps):
+        for group in self.factor_groups.values():
+            group.update(pass_name, sampling_step, total_sampling_steps)
 
     @property
     def signature(self) -> str:
@@ -1995,6 +2048,77 @@ def _rewrite_batch_prompts(p, state: RuntimeState):
         state.hires.prompt_names.update(_collect_prompt_names(p.hr_prompts))
 
 
+def _is_online_lora_compatible() -> bool:
+    ops = str(getattr(dynamic_args, "ops", "") or "")
+    if bool(getattr(dynamic_args, "nunchaku", False)):
+        return False
+    if ops.startswith("Mixed") or ops.endswith("FP8"):
+        return False
+    return True
+
+
+def _is_unet_patcher(patcher) -> bool:
+    try:
+        from backend.patcher.unet import UnetPatcher
+
+        return isinstance(patcher, UnetPatcher)
+    except Exception:
+        return False
+
+
+def _contains_scheduled_strength(patches: list) -> bool:
+    for patch in patches or []:
+        if isinstance(patch, tuple) and patch and isinstance(patch[0], ScheduledStrength):
+            return True
+    return False
+
+
+def _register_compile_import_alias():
+    global _COMPILE_IMPORT_ALIAS_REGISTERED
+    if _COMPILE_IMPORT_ALIAS_REGISTERED:
+        return
+
+    this_file = os.path.normcase(os.path.abspath(__file__))
+    module = sys.modules.get(__name__)
+    if module is None:
+        for candidate in getattr(script_loading, "loaded_scripts", {}).values():
+            candidate_file = getattr(candidate, "__file__", None)
+            if candidate_file and os.path.normcase(os.path.abspath(candidate_file)) == this_file:
+                module = candidate
+                break
+
+    if module is None:
+        for data in getattr(scripts, "scripts_data", []):
+            candidate = getattr(data, "module", None)
+            candidate_file = getattr(candidate, "__file__", None)
+            if candidate_file and os.path.normcase(os.path.abspath(candidate_file)) == this_file:
+                module = candidate
+                break
+
+    if module is None:
+        return
+
+    module_name = Path(__file__).stem
+    module_dir = os.path.dirname(os.path.abspath(__file__))
+    if module_dir and module_dir not in sys.path:
+        sys.path.insert(0, module_dir)
+
+    sys.modules[module_name] = module
+    sys.modules[f"{module_name}.py"] = module
+    if not hasattr(module, "__path__"):
+        module.__path__ = []
+    setattr(module, "py", module)
+    _COMPILE_IMPORT_ALIAS_REGISTERED = True
+
+
+def _should_force_unet_online_for_file(filename) -> bool:
+    state = _ACTIVE_STATE
+    if state is None or not state.enabled or not _is_online_lora_compatible():
+        return False
+    config = state.current_config()
+    return config.file_matches(filename)
+
+
 def _patch_added_strengths(patch_destination, before_counts, state: RuntimeState, config: PassConfig, online_mode):
     pass_name = state.current_pass_name()
     for key, current_patches in patch_destination.items():
@@ -2013,7 +2137,7 @@ def _patch_added_strengths(patch_destination, before_counts, state: RuntimeState
 
             if _is_unet_patch_key(model_key):
                 if online_mode:
-                    strength_obj = ScheduledStrength(base_strength, config, pass_name)
+                    strength_obj = ScheduledStrength(base_strength, state.factor_group(pass_name, config))
                     state.register(strength_obj)
                     strength_patch = strength_obj
                 else:
@@ -2029,11 +2153,233 @@ def _patch_added_strengths(patch_destination, before_counts, state: RuntimeState
             current_patches[index] = (strength_patch, patch_value, strength_model, offset, function)
 
 
+def _install_int8_stage_patch():
+    global _ORIGINAL_INT8_PATCH_WEIGHT_TO_DEVICE, _ORIGINAL_INT8_LINEAR_FORWARD, _ORIGINAL_INT8_PROCESS_ONLINE_LORAS
+
+    try:
+        import torch
+        from backend import operations, utils
+        from backend.operations_int8 import CONVROT_GROUP_SIZE, INT8ModelPatcher
+        from backend.quant_rotation import build_hadamard, rotate_activation, rotate_weight
+    except Exception as exc:
+        logger.debug("Skipped Anima stage scheduler INT8 patch: %s", exc)
+        return
+
+    def clear_stage_lora_patches(model):
+        for _name, module in getattr(model, "named_modules", lambda: [])():
+            if hasattr(module, "anima_stage_lora_patches"):
+                module.anima_stage_lora_patches = []
+
+    if not getattr(INT8ModelPatcher, "_anima_stage_scheduler_process_online_patched", False):
+        _ORIGINAL_INT8_PROCESS_ONLINE_LORAS = INT8ModelPatcher._process_online_loras
+
+        def process_online_loras_with_stage_scheduler(self):
+            clear_stage_lora_patches(self.model)
+            return _ORIGINAL_INT8_PROCESS_ONLINE_LORAS(self)
+
+        process_online_loras_with_stage_scheduler._anima_stage_scheduler_patched = True
+        INT8ModelPatcher._process_online_loras = process_online_loras_with_stage_scheduler
+        INT8ModelPatcher._anima_stage_scheduler_process_online_patched = True
+
+    if not getattr(INT8ModelPatcher, "_anima_stage_scheduler_patch_weight_patched", False):
+        _ORIGINAL_INT8_PATCH_WEIGHT_TO_DEVICE = INT8ModelPatcher.patch_weight_to_device
+
+        def patch_weight_to_device_with_stage_scheduler(self, key, device_to=None, inplace_update=False, *, online=False):
+            if (not online) or key not in getattr(self, "online_patches", {}):
+                return _ORIGINAL_INT8_PATCH_WEIGHT_TO_DEVICE(self, key, device_to=device_to, inplace_update=inplace_update, online=online)
+
+            module_path = str(key).rsplit(".", 1)[0]
+            try:
+                module = utils.get_attr(self.model, module_path)
+            except Exception:
+                return _ORIGINAL_INT8_PATCH_WEIGHT_TO_DEVICE(self, key, device_to=device_to, inplace_update=inplace_update, online=online)
+
+            if not getattr(module, "_is_quantized", False):
+                return _ORIGINAL_INT8_PATCH_WEIGHT_TO_DEVICE(self, key, device_to=device_to, inplace_update=inplace_update, online=online)
+
+            current_patches = self.online_patches.get(key, [])
+            if not _contains_scheduled_strength(current_patches):
+                if hasattr(module, "anima_stage_lora_patches"):
+                    module.anima_stage_lora_patches = []
+                return _ORIGINAL_INT8_PATCH_WEIGHT_TO_DEVICE(self, key, device_to=device_to, inplace_update=inplace_update, online=online)
+
+            weight = utils.get_attr(self.model, key)
+            device = weight.device if weight is not None else self.offload_device
+            lora_patches = []
+            stage_lora_patches = []
+
+            for patch in current_patches:
+                if not isinstance(patch, tuple) or len(patch) < 5:
+                    continue
+
+                strength_patch, adapter, strength_model, offset, _function = patch[:5]
+                if not hasattr(adapter, "weights"):
+                    continue
+
+                weights = adapter.weights
+                if len(weights) != 6:
+                    continue
+
+                up, down, alpha, mid, _dora, _reshape = weights
+                rank = down.shape[0] if down.ndim >= 2 else 1
+                strength_model = _to_float(strength_model, 1.0)
+                is_scheduled = isinstance(strength_patch, ScheduledStrength)
+                strength = 1.0 if is_scheduled else _to_float(strength_patch, 1.0)
+                scale = (alpha / rank) * strength * strength_model if alpha is not None else strength * strength_model
+
+                down_scaled = down.flatten(1) * scale
+                if mid is not None:
+                    down_scaled = torch.mm(mid.flatten(1), down.flatten(1)) * scale
+
+                if getattr(module, "_use_convrot", False) and down_scaled.shape[1] % CONVROT_GROUP_SIZE == 0:
+                    try:
+                        group_size = getattr(module, "_convrot_groupsize", CONVROT_GROUP_SIZE)
+                        h_matrix = build_hadamard(group_size, device=down_scaled.device, dtype=down_scaled.dtype)
+                        down_scaled = rotate_weight(down_scaled, h_matrix, group_size=group_size)
+                    except Exception:
+                        pass
+
+                start, size = None, None
+                if offset is not None:
+                    _dim, start, size = offset
+
+                item = (down_scaled.to(device), up.flatten(1).to(device), start, size)
+                if is_scheduled:
+                    stage_lora_patches.append((*item, strength_patch))
+                else:
+                    lora_patches.append(item)
+
+            module.lora_patches = lora_patches
+            module.anima_stage_lora_patches = stage_lora_patches
+            if not hasattr(self.model, "online_lora_layers"):
+                utils.set_attr_raw(self.model, "online_lora_layers", set())
+            self.model.online_lora_layers.add(module)
+
+        patch_weight_to_device_with_stage_scheduler._anima_stage_scheduler_patched = True
+        INT8ModelPatcher.patch_weight_to_device = patch_weight_to_device_with_stage_scheduler
+        INT8ModelPatcher._anima_stage_scheduler_patch_weight_patched = True
+
+    linear_cls = operations.ForgeOperationsInt8.Linear
+    if not getattr(linear_cls, "_anima_stage_scheduler_forward_patched", False):
+        _ORIGINAL_INT8_LINEAR_FORWARD = linear_cls.forward
+        linear = torch.nn.functional.linear
+
+        def linear_forward_with_stage_scheduler(self, x):
+            y = _ORIGINAL_INT8_LINEAR_FORWARD(self, x)
+            stage_lora_patches = getattr(self, "anima_stage_lora_patches", None)
+            if not stage_lora_patches:
+                return y
+
+            x_shape = x.shape
+            x_2d = x.reshape(-1, x_shape[-1])
+            if getattr(self, "_use_convrot", False):
+                group_size = getattr(self, "_convrot_groupsize", CONVROT_GROUP_SIZE)
+                h_matrix = build_hadamard(group_size, device=x.device, dtype=x.dtype)
+                x_2d = rotate_activation(x_2d, h_matrix, group_size=group_size)
+
+            y_shape = y.shape
+            y_2d = y.reshape(-1, y_shape[-1])
+            for lora_down, lora_up, lora_start, lora_size, strength in stage_lora_patches:
+                current_strength = float(strength)
+                if current_strength == 0.0:
+                    continue
+
+                lora_down = lora_down.to(x.device, non_blocking=True)
+                lora_up = lora_up.to(x.device, non_blocking=True)
+                lora_x = linear(x_2d.to(lora_down.dtype), lora_down)
+                lora_y = linear(lora_x, lora_up).to(y_2d.dtype)
+                if current_strength != 1.0:
+                    lora_y = lora_y * current_strength
+
+                if lora_start is not None:
+                    y_2d[:, lora_start : lora_start + lora_size] = y_2d[:, lora_start : lora_start + lora_size] + lora_y
+                else:
+                    y_2d = y_2d + lora_y
+
+            return y_2d.reshape(y_shape)
+
+        linear_forward_with_stage_scheduler._anima_stage_scheduler_patched = True
+        linear_cls.forward = linear_forward_with_stage_scheduler
+        linear_cls._anima_stage_scheduler_forward_patched = True
+
+
+def _install_lora_logging_patch():
+    global _ORIGINAL_LOAD_LORA_FOR_MODELS
+
+    try:
+        import networks
+    except Exception as exc:
+        logger.debug("Skipped Anima stage scheduler LoRA logging patch: %s", exc)
+        return
+
+    if getattr(networks.load_lora_for_models, "_anima_stage_scheduler_patched", False):
+        return
+
+    _ORIGINAL_LOAD_LORA_FOR_MODELS = networks.load_lora_for_models
+
+    def load_lora_for_models_with_stage_scheduler(model, clip, lora, strength_model: float, strength_clip: float, filename: str = "default", online_mode: bool = False):
+        force_unet_online = (not bool(online_mode)) and _should_force_unet_online_for_file(filename)
+        if not force_unet_online:
+            return _ORIGINAL_LOAD_LORA_FOR_MODELS(model, clip, lora, strength_model, strength_clip, filename=filename, online_mode=online_mode)
+
+        model_flag: str = type(model.model).__name__ if model is not None else "default"
+
+        unet_keys = networks.model_lora_keys_unet(model.model) if model is not None else {}
+        clip_keys = networks.model_lora_keys_clip(clip.cond_stage_model) if clip is not None else {}
+
+        if model.model.diffusion_model.__class__.__name__ == "Anima":
+            networks.process_anima(lora)
+
+        lora_unmatch = lora
+        lora_unet, lora_unmatch = networks.load_lora(lora_unmatch, unet_keys)
+        lora_clip, lora_unmatch = networks.load_lora(lora_unmatch, clip_keys)
+
+        if len(lora) > 0 and len(lora_unmatch) / len(lora) > 0.5:
+            networks.logger.warning(f"[LORA] LoRA mismatch for {model_flag}: {filename}")
+            return model, clip
+
+        if len(lora_unmatch) > 0:
+            networks.logger.info(f"[LORA] Loading {os.path.basename(filename)} for {model_flag} with {len(lora_unmatch)} unmatched keys")
+
+        logger.debug("Scheduled target forced online: %s", filename)
+        unet_online_mode = True
+        clip_online_mode = bool(online_mode)
+
+        if model is not None and len(lora_unet) > 0:
+            new_model = model.clone()
+            loaded_keys = new_model.add_patches(filename=filename, patches=lora_unet, strength_patch=strength_model, online_mode=unet_online_mode)
+            skipped_keys = [item for item in lora_unet if item not in loaded_keys]
+            if len(skipped_keys) / len(lora_unet) > 0.25:
+                networks.logger.warning(f"[LORA] Mismatch {filename} for {model_flag}-UNet with {len(skipped_keys)} keys mismatched in {len(loaded_keys)} keys")
+            else:
+                networks.logger.info(f"[LORA] Loaded {os.path.basename(filename)} for {model_flag}-UNet with {len(loaded_keys)} keys at weight {strength_model} (skipped {len(skipped_keys)} keys) with on_the_fly = {unet_online_mode}")
+                model = new_model
+
+        if clip is not None and len(lora_clip) > 0:
+            new_clip = clip.clone()
+            loaded_keys = new_clip.add_patches(filename=filename, patches=lora_clip, strength_patch=strength_clip, online_mode=clip_online_mode)
+            skipped_keys = [item for item in lora_clip if item not in loaded_keys]
+            if len(skipped_keys) / len(lora_clip) > 0.25:
+                networks.logger.warning(f"[LORA] Mismatch {filename} for {model_flag}-CLIP with {len(skipped_keys)} keys mismatched in {len(loaded_keys)} keys")
+            else:
+                networks.logger.info(f"[LORA] Loaded {os.path.basename(filename)} for {model_flag}-CLIP with {len(loaded_keys)} keys at weight {strength_clip} (skipped {len(skipped_keys)} keys) with on_the_fly = {clip_online_mode}")
+                clip = new_clip
+
+        return model, clip
+
+    load_lora_for_models_with_stage_scheduler._anima_stage_scheduler_patched = True
+    networks.load_lora_for_models = load_lora_for_models_with_stage_scheduler
+
+
 def install_patch():
     global _ORIGINAL_ADD_PATCHES, _ORIGINAL_EXTRA_NETWORKS_ACTIVATE
 
     from backend.patcher.base import ModelPatcher
     from modules import extra_networks
+
+    _register_compile_import_alias()
+    _install_int8_stage_patch()
+    _install_lora_logging_patch()
 
     if not getattr(ModelPatcher.add_patches, "_anima_stage_scheduler_patched", False):
         _ORIGINAL_ADD_PATCHES = ModelPatcher.add_patches
@@ -2043,14 +2389,19 @@ def install_patch():
             config = state.current_config() if state is not None and state.enabled else None
             should_control = config is not None and config.file_matches(filename)
             lora_config = config.config_for_file(filename) if should_control else None
+            force_online = should_control and _is_unet_patcher(self) and _is_online_lora_compatible() and not bool(online_mode)
+            effective_online_mode = True if force_online else online_mode
 
-            patch_destination = self.online_patches if online_mode else self.patches
+            patch_destination = self.online_patches if effective_online_mode else self.patches
             before_counts = {key: len(value) for key, value in patch_destination.items()} if should_control else {}
 
-            loaded = _ORIGINAL_ADD_PATCHES(self, patches, strength_patch=strength_patch, strength_model=strength_model, filename=filename, online_mode=online_mode)
+            if force_online:
+                logger.debug("Scheduled target forced online: %s", filename)
+
+            loaded = _ORIGINAL_ADD_PATCHES(self, patches, strength_patch=strength_patch, strength_model=strength_model, filename=filename, online_mode=effective_online_mode)
 
             if should_control:
-                _patch_added_strengths(patch_destination, before_counts, state, lora_config, bool(online_mode))
+                _patch_added_strengths(patch_destination, before_counts, state, lora_config, bool(effective_online_mode))
 
             return loaded
 
@@ -2089,11 +2440,7 @@ def _denoiser_callback(params):
         return
 
     pass_name = state.current_pass_name()
-    for wrapper in state.wrappers:
-        if wrapper.pass_name == pass_name:
-            wrapper.factor = _stage_curve_factor(wrapper.config, params.sampling_step, params.total_sampling_steps)
-        else:
-            wrapper.factor = 0.0
+    state.update_factor_groups(pass_name, params.sampling_step, params.total_sampling_steps)
 
 
 def _register_cfg_callback_once():
@@ -2557,10 +2904,8 @@ class Script(scripts.Script):
             hires=hires_config,
             hr_disable_mode=_normalize_disable_mode(hr_disable_mode),
             hr_disable_tags=_parse_disable_tags(hr_disable_tags),
-            original_online_lora=bool(dynamic_args.online_lora),
         )
 
-        dynamic_args.online_lora = True
         p._anima_lora_stage_scheduler_state = state
         _ACTIVE_STATE = state
 
@@ -2597,8 +2942,9 @@ class Script(scripts.Script):
 
         state = getattr(p, "_anima_lora_stage_scheduler_state", None)
         if state is not None:
-            dynamic_args.online_lora = state.original_online_lora
             state.set_factor(1.0)
+            if getattr(p, "sd_model", None) is not None:
+                p.sd_model.current_lora_hash = f"anima-stage-scheduler:finished:{state.run_id}"
             p._anima_lora_stage_scheduler_state = None
         if _ACTIVE_STATE is state:
             _ACTIVE_STATE = None
