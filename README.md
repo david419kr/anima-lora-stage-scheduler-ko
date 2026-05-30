@@ -1,6 +1,6 @@
 # Anima LoRA Stage Scheduler
 
-English | [中文](README_zh.md)
+English | [Korean](README_ko.md)
 
 Anima LoRA Stage Scheduler is a Forge/WebUI extension for controlling when Anima LoRAs affect the sampling process. It can apply a LoRA only during composition, character-feature, or style stages, and it can use different scheduling settings for the base pass and Hires. fix pass.
 
@@ -14,7 +14,7 @@ Anima LoRA Stage Scheduler is a Forge/WebUI extension for controlling when Anima
 - Optional Hires. fix LoRA disabling for all LoRAs or selected full LoRA tags.
 - Per-LoRA template overrides, so different LoRAs can use different stage timing in the same prompt.
 - Template management: save, rename, delete, and build custom templates from preset combinations.
-- Settings-page UI language switch: `zh` and `en`.
+- Settings-page UI language switch: `en` and `ko`.
 
 ## Installation
 
@@ -58,10 +58,10 @@ The template manager can save the current base panel as a template, rename custo
 
 ## Language Setting
 
-Open **Settings**, find **Anima LoRA Stage Scheduler**, and set the language to `zh` or `en`. Reload UI after changing the option.
+Open **Settings**, find **Anima LoRA Stage Scheduler**, and set the language to `en` or `ko`. Reload UI after changing the option.
 
 ## Notes
 
-- Template keys are kept stable for compatibility, so some built-in template names may remain Chinese internally.
+- Legacy template values are migrated to canonical English IDs for compatibility.
 - The extension controls LoRA patch strength during sampling. It does not modify checkpoints or LoRA files.
 - For best results, combine this with moderate LoRA weights and avoid stacking many aggressive stage schedules at once.

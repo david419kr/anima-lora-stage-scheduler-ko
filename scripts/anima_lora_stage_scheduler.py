@@ -12,69 +12,14 @@ import gradio as gr
 
 from backend.args import dynamic_args
 from modules import script_callbacks, script_loading, scripts, shared
+from modules.options import categories
 
 
 logger = logging.getLogger("anima_lora_stage_scheduler")
 LANGUAGE_OPTION = "anima_lora_stage_scheduler_language"
-LANGUAGE_CHOICES = ("zh", "en")
+LANGUAGE_CHOICES = ("en", "ko")
+LEGACY_LANGUAGE_VALUE = "\x7a\x68"
 LANG = {
-    "zh": {
-        "settings_label": "Anima LoRA 阶段介入界面语言",
-        "title": "Anima LoRA 阶段介入",
-        "enable": "启用阶段介入控制",
-        "base_panel": "底图阶段",
-        "hires_panel": "高分辨率修复阶段",
-        "hires_lora_panel": "高分辨率修复 LoRA 阶段",
-        "target_scope": "目标范围",
-        "panel_weight": "面板权重，0=使用提示词/分层插件",
-        "target_lora": "目标 LoRA",
-        "target_lora_placeholder": "目标范围为“仅目标列表”时填写，多个用逗号或换行分隔",
-        "template": "模板",
-        "copy": "复制",
-        "builder": "组合预设",
-        "auto_timing": "根据 Shift 自动设置介入时间",
-        "single_lora_template": "单 LoRA 模板",
-        "single_lora_template_placeholder": "每行一个：LoRA名=模板名\n也支持：<lora:name:0.8>=仅人物特征阶段介入\n未填写的 LoRA 使用上方模板",
-        "start": "开始比例",
-        "end": "结束比例",
-        "peak": "峰值比例",
-        "strength": "阶段强度倍率",
-        "curve": "强度曲线",
-        "hr_independent": "高分辨率修复使用独立面板；关闭时继承底图设置，但按 Hires Shift 自动设置时间",
-        "hr_disable": "高分辨率修复时禁用 LoRA",
-        "hr_disable_tags": "禁用指定完整 LoRA 标签",
-        "template_manager": "模板管理",
-        "existing_template": "已有模板",
-        "rename_to": "重命名为",
-        "rename_template": "重命名模板",
-        "delete_template": "删除模板",
-        "new_template_name": "新模板名称",
-        "save_auto_template": "保存为自动时间模板",
-        "save_current_base": "保存当前底图面板为模板",
-        "template_help": "### 模板教程",
-        "close": "关闭",
-        "combo_title": "### 组合预设",
-        "template_name": "模板名称",
-        "base_preset_combo": "基础预设组合",
-        "preview_shift": "预览 Shift",
-        "save_combo": "保存组合模板",
-        "combo_current": "当前组合：",
-        "intervention_preview": "介入时间预览",
-        "table_preset": "基础预设",
-        "table_action": "行为",
-        "table_start": "开始",
-        "table_end": "结束",
-        "table_peak": "峰值",
-        "table_strength": "强度",
-        "table_curve": "曲线",
-        "allow_action": "介入",
-        "ban_action": "禁止",
-        "zero_in_window": "窗口内 0",
-        "help_title": "### Anima LoRA 阶段介入教程",
-        "current_template": "当前模板",
-        "current_shift": "当前 Shift",
-        "template_parts": "当前模板组成：",
-    },
     "en": {
         "settings_label": "Anima LoRA Stage Scheduler UI language",
         "title": "Anima LoRA Stage Scheduler",
@@ -91,7 +36,7 @@ LANG = {
         "builder": "Preset combo",
         "auto_timing": "Auto timing from Shift",
         "single_lora_template": "Per-LoRA templates",
-        "single_lora_template_placeholder": "One per line: LoRA name=template name\nAlso supports: <lora:name:0.8>=仅人物特征阶段介入\nEmpty entries use the template above",
+        "single_lora_template_placeholder": "One per line: LoRA name=template name\nAlso supports: <lora:name:0.8>=character-feature-stage\nEmpty entries use the template above",
         "start": "Start ratio",
         "end": "End ratio",
         "peak": "Peak ratio",
@@ -131,92 +76,236 @@ LANG = {
         "current_template": "Current template",
         "current_shift": "Current Shift",
         "template_parts": "Template parts:",
+        "intro": "Schedule when Anima LoRAs affect sampling: use composition, character, style, or custom timing windows, with separate base and Hires. fix controls.",
+        "template_name_required": "Template name is required.",
+        "builtin_template_locked": "Built-in templates cannot be overwritten. Choose another name.",
+        "template_saved": "Saved template: {name}",
+        "preset_required": "Select at least one base preset.",
+        "unknown_preset": "Unknown base preset: {preset}",
+        "combo_conflict": "Combo conflict: {stage} has both Apply and Block selected, so it cannot be saved.",
+        "builtin_preset_locked": "Built-in base presets cannot be overwritten. Choose another name.",
+        "combo_saved": "Saved combo template: {name} = {presets}\n\n{preview}",
+        "no_template_selected": "No template selected.",
+        "builtin_template_rename_locked": "Built-in templates cannot be renamed.",
+        "new_name_required": "New name is required.",
+        "builtin_name_forbidden": "Cannot rename to a built-in template name.",
+        "same_name": "New name is the same as the old name.",
+        "template_missing": "Template to rename was not found.",
+        "target_name_exists": "Target name already exists.",
+        "template_renamed": "Renamed template: {old_name} -> {new_name}",
+        "builtin_template_delete_locked": "Built-in templates cannot be deleted.",
+        "template_deleted": "Deleted template: {name}",
+        "help_line_templates": "- Templates are built from base presets. Apply means the LoRA is active only in that stage; Block forces it to 0 in that stage.",
+        "help_line_shift": "- When auto timing from Shift is enabled, every base preset moves its start, end, and peak ratios from the current Shift value.",
+        "help_line_combo": "- Combo templates can mix stages, but the same stage cannot be both Apply and Block.",
+        "help_line_ratios": "- Start/end are sampling progress ratios from 0 to 1; peak is the strongest point of the curve; stage strength multiplies the final LoRA strength.",
+        "help_part_line": "- `{preset}`: {stage} {action}, auto window {start} - {end}, peak {peak}, strength {strength}",
+    },
+    "ko": {
+        "settings_label": "Anima LoRA 단계 스케줄러 UI 언어",
+        "title": "Anima LoRA Stage Scheduler",
+        "enable": "단계 스케줄링 사용",
+        "base_panel": "기본 패스",
+        "hires_panel": "Hires. fix 단계",
+        "hires_lora_panel": "Hires. fix LoRA 단계",
+        "target_scope": "대상 범위",
+        "panel_weight": "패널 가중치, 0 = 프롬프트 / 레이어 가중치 플러그인 사용",
+        "target_lora": "대상 LoRA",
+        "target_lora_placeholder": "대상 범위가 대상 목록일 때만 입력; 여러 이름은 쉼표나 줄바꿈으로 구분",
+        "template": "템플릿",
+        "copy": "복사",
+        "builder": "프리셋 조합",
+        "auto_timing": "Shift 기준 자동 타이밍",
+        "single_lora_template": "LoRA별 템플릿",
+        "single_lora_template_placeholder": "한 줄에 하나씩: LoRA 이름=템플릿 이름\n예: <lora:name:0.8>=character-feature-stage\n비워 둔 LoRA는 위 템플릿을 사용",
+        "start": "시작 비율",
+        "end": "종료 비율",
+        "peak": "피크 비율",
+        "strength": "단계 강도 배율",
+        "curve": "강도 곡선",
+        "hr_independent": "Hires. fix에서 독립 패널 사용; 끄면 기본 설정을 상속하되 Hires Shift로 타이밍 계산",
+        "hr_disable": "Hires. fix 중 LoRA 비활성화",
+        "hr_disable_tags": "비활성화할 전체 LoRA 태그",
+        "template_manager": "템플릿 관리",
+        "existing_template": "기존 템플릿",
+        "rename_to": "새 이름",
+        "rename_template": "템플릿 이름 변경",
+        "delete_template": "템플릿 삭제",
+        "new_template_name": "새 템플릿 이름",
+        "save_auto_template": "자동 타이밍 템플릿으로 저장",
+        "save_current_base": "현재 기본 패널을 템플릿으로 저장",
+        "template_help": "### 템플릿 안내",
+        "close": "닫기",
+        "combo_title": "### 프리셋 조합",
+        "template_name": "템플릿 이름",
+        "base_preset_combo": "기본 프리셋 조합",
+        "preview_shift": "미리보기 Shift",
+        "save_combo": "조합 템플릿 저장",
+        "combo_current": "현재 조합: ",
+        "intervention_preview": "타이밍 미리보기",
+        "table_preset": "기본 프리셋",
+        "table_action": "동작",
+        "table_start": "시작",
+        "table_end": "종료",
+        "table_peak": "피크",
+        "table_strength": "강도",
+        "table_curve": "곡선",
+        "allow_action": "적용",
+        "ban_action": "차단",
+        "zero_in_window": "창 안에서 0",
+        "help_title": "### Anima LoRA 단계 스케줄러 안내",
+        "current_template": "현재 템플릿",
+        "current_shift": "현재 Shift",
+        "template_parts": "템플릿 구성:",
+        "intro": "Anima LoRA가 샘플링에 영향을 주는 시점을 조절합니다. 구도, 캐릭터, 스타일 또는 사용자 지정 타이밍 창을 사용할 수 있고 기본 패스와 Hires. fix를 따로 제어할 수 있습니다.",
+        "template_name_required": "템플릿 이름이 필요합니다.",
+        "builtin_template_locked": "내장 템플릿은 덮어쓸 수 없습니다. 다른 이름을 선택하세요.",
+        "template_saved": "템플릿 저장됨: {name}",
+        "preset_required": "기본 프리셋을 하나 이상 선택하세요.",
+        "unknown_preset": "알 수 없는 기본 프리셋: {preset}",
+        "combo_conflict": "조합 충돌: {stage}에 적용과 차단이 동시에 선택되어 저장할 수 없습니다.",
+        "builtin_preset_locked": "내장 기본 프리셋은 덮어쓸 수 없습니다. 다른 이름을 선택하세요.",
+        "combo_saved": "조합 템플릿 저장됨: {name} = {presets}\n\n{preview}",
+        "no_template_selected": "선택된 템플릿이 없습니다.",
+        "builtin_template_rename_locked": "내장 템플릿은 이름을 바꿀 수 없습니다.",
+        "new_name_required": "새 이름이 필요합니다.",
+        "builtin_name_forbidden": "내장 템플릿 이름으로 바꿀 수 없습니다.",
+        "same_name": "새 이름이 기존 이름과 같습니다.",
+        "template_missing": "이름을 바꿀 템플릿을 찾을 수 없습니다.",
+        "target_name_exists": "대상 이름이 이미 있습니다.",
+        "template_renamed": "템플릿 이름 변경됨: {old_name} -> {new_name}",
+        "builtin_template_delete_locked": "내장 템플릿은 삭제할 수 없습니다.",
+        "template_deleted": "템플릿 삭제됨: {name}",
+        "help_line_templates": "- 템플릿은 기본 프리셋 조합으로 구성됩니다. 적용은 해당 단계에서만 LoRA를 켜고, 차단은 해당 단계에서 LoRA를 0으로 만듭니다.",
+        "help_line_shift": "- Shift 기준 자동 타이밍을 켜면 각 기본 프리셋의 시작, 종료, 피크 비율이 현재 Shift 값에 맞게 이동합니다.",
+        "help_line_combo": "- 조합 템플릿은 여러 단계를 섞을 수 있지만 같은 단계에 적용과 차단을 동시에 둘 수 없습니다.",
+        "help_line_ratios": "- 시작/종료는 0에서 1 사이의 샘플링 진행 비율이고, 피크는 곡선이 가장 강한 지점이며, 단계 강도는 최종 LoRA 강도에 곱해집니다.",
+        "help_part_line": "- `{preset}`: {stage} {action}, 자동 창 {start} - {end}, 피크 {peak}, 강도 {strength}",
     },
 }
 
 
 def _language():
-    value = getattr(shared.opts, LANGUAGE_OPTION, "zh")
-    return value if value in LANGUAGE_CHOICES else "zh"
+    value = str(getattr(shared.opts, LANGUAGE_OPTION, "en") or "en").strip().lower()
+    if value == LEGACY_LANGUAGE_VALUE:
+        return "ko"
+    return value if value in LANGUAGE_CHOICES else "en"
 
 
 def _t(key):
-    return LANG.get(_language(), LANG["zh"]).get(key, key)
-
-
-def _b(zh_text, en_text):
-    return en_text if _language() == "en" else zh_text
-
-
-INTRO_EN = (
-    "Schedule when Anima LoRAs affect sampling: use composition, character, "
-    "style, or custom timing windows, with separate base and Hires. fix controls."
-)
-INTRO_ZH = "控制 Anima LoRA 在采样中的介入时间：可使用构图、人物、画风或自定义时间窗口，并可分别设置底图和高分辨率修复阶段。"
-
-
-def _intro_text(language):
-    return INTRO_ZH if language == "中文" else INTRO_EN
+    return LANG.get(_language(), LANG["en"]).get(key, key)
 
 
 def _intro_block(elem_id):
-    with gr.Row():
-        intro_language = gr.Radio(
-            choices=["English", "中文"],
-            value="English",
-            label="Description language / 说明语言",
-            elem_id=elem_id("intro_language"),
-        )
-    intro = gr.Markdown(value=INTRO_EN, elem_id=elem_id("intro"))
-    intro_language.change(fn=_intro_text, inputs=[intro_language], outputs=[intro], queue=False, show_progress=False)
+    gr.Markdown(value=_t("intro"), elem_id=elem_id("intro"))
+
+
+def _labels(mapping):
+    return mapping.get(_language(), mapping["en"])
+
+
+def _normalize_with_alias(value, aliases, default):
+    text = str(value or "").strip()
+    if text in aliases:
+        return aliases[text]
+    lowered = text.lower()
+    return aliases.get(lowered, default)
+
+
+def _contains_han(text) -> bool:
+    return HAN_RE.search(str(text or "")) is not None
 
 
 def _target_mode_choices():
-    return [TARGET_MODE_EN[item] for item in TARGET_MODE_CHOICES] if _language() == "en" else TARGET_MODE_CHOICES
+    labels = _labels(TARGET_MODE_LABELS)
+    return [labels[item] for item in TARGET_MODE_CHOICES]
 
 
 def _display_target_mode(value):
     canonical = _normalize_target_mode(value)
-    return TARGET_MODE_EN.get(canonical, canonical) if _language() == "en" else canonical
+    return _labels(TARGET_MODE_LABELS).get(canonical, canonical)
 
 
 def _normalize_target_mode(value):
-    value = str(value or "")
-    if value in TARGET_MODE_CHOICES:
-        return value
-    return TARGET_MODE_ALIASES.get(value, MODE_AUTO_ANIMA)
+    return _normalize_with_alias(value, TARGET_MODE_ALIASES, MODE_AUTO_ANIMA)
 
 
 def _disable_choices():
-    return [DISABLE_EN[item] for item in DISABLE_CHOICES] if _language() == "en" else DISABLE_CHOICES
+    labels = _labels(DISABLE_LABELS)
+    return [labels[item] for item in DISABLE_CHOICES]
 
 
 def _display_disable_mode(value):
     canonical = _normalize_disable_mode(value)
-    return DISABLE_EN.get(canonical, canonical) if _language() == "en" else canonical
+    return _labels(DISABLE_LABELS).get(canonical, canonical)
 
 
 def _normalize_disable_mode(value):
-    value = str(value or "")
-    if value in DISABLE_CHOICES:
-        return value
-    return DISABLE_ALIASES.get(value, DISABLE_NONE)
+    return _normalize_with_alias(value, DISABLE_ALIASES, DISABLE_NONE)
+
+
+def _curve_choices():
+    labels = _labels(CURVE_LABELS)
+    return [labels[item] for item in CURVE_CHOICES]
+
+
+def _display_curve(value):
+    canonical = _normalize_curve(value)
+    return _labels(CURVE_LABELS).get(canonical, canonical)
+
+
+def _normalize_curve(value):
+    return _normalize_with_alias(value, CURVE_ALIASES, CURVE_SMOOTH)
+
+
+def _display_stage(value):
+    canonical = _normalize_stage(value)
+    return _labels(STAGE_LABELS).get(canonical, canonical)
+
+
+def _normalize_stage(value, fallback=None):
+    default = fallback or STAGE_CHARACTER
+    return _normalize_with_alias(value, STAGE_ALIASES, default)
+
+
+def _display_preset(value):
+    canonical = _normalize_preset_name(value)
+    return _labels(PRESET_LABELS).get(canonical, canonical)
+
+
+def _normalize_preset_name(value):
+    return _normalize_with_alias(value, PRESET_ALIASES, str(value or "").strip())
+
+
+def _display_template_name(value):
+    canonical = _normalize_template_name(value)
+    return _labels(TEMPLATE_LABELS).get(canonical, canonical)
+
+
+def _normalize_template_name(value):
+    return _normalize_with_alias(value, TEMPLATE_ALIASES, str(value or "").strip())
+
+
+def _builder_preset_choices():
+    return [_display_preset(item) for item in TEMPLATE_PRESET_CHOICES]
 
 
 def _register_ui_settings():
+    categories.register_category("extensions", "Extensions")
+    info = shared.OptionInfo(
+        "en",
+        _t("settings_label"),
+        gr.Radio,
+        {"choices": LANGUAGE_CHOICES},
+        section=("anima-lora-stage-scheduler", "Anima LoRA Stage Scheduler"),
+        category_id="extensions",
+    ).needs_reload_ui()
     if LANGUAGE_OPTION in shared.opts.data_labels:
+        shared.opts.data_labels[LANGUAGE_OPTION] = info
+        if getattr(shared.opts, LANGUAGE_OPTION, None) == LEGACY_LANGUAGE_VALUE:
+            setattr(shared.opts, LANGUAGE_OPTION, "ko")
         return
-    shared.opts.add_option(
-        LANGUAGE_OPTION,
-        shared.OptionInfo(
-            "zh",
-            "Anima LoRA Stage Scheduler language / Anima LoRA 阶段介入语言",
-            gr.Radio,
-            {"choices": LANGUAGE_CHOICES},
-            section=("anima-lora-stage-scheduler", "Anima LoRA Stage Scheduler"),
-            category_id="system",
-        ).needs_reload_ui(),
-    )
+    shared.opts.add_option(LANGUAGE_OPTION, info)
 
 
 script_callbacks.on_ui_settings(_register_ui_settings)
@@ -225,37 +314,58 @@ EXTENSION_DIR = Path(__file__).resolve().parents[1]
 TEMPLATE_FILE = EXTENSION_DIR / "templates.json"
 
 LORA_TAG_RE = re.compile(r"<lora:([^:>]+)(?::([^>]*))?>")
+HAN_RE = re.compile(r"[\u4e00-\u9fff]")
 ANIMA_BLOCK_RE = re.compile(r"(?:^|\.)(?:diffusion_model\.)?(?:net\.)?blocks\.(\d+)\.")
 QWEN_LAYER_RE = re.compile(r"(?:^|\.)(?:text_encoders\.)?qwen3_06b\.model\.layers\.(\d+)\.")
 GENERIC_QWEN_LAYER_RE = re.compile(r"(?:^|\.)(?:text_encoders\.)?qwen3_06b\.(?:model\.)?layers\.(\d+)\.")
 QWEN_ADAPTER_BLOCK_RE = re.compile(r"(?:^|\.)(?:text_encoders\.)?qwen3_06b\.llm_adapter\.blocks\.(\d+)\.")
 LEGACY_QWEN_ADAPTER_BLOCK_RE = re.compile(r"(?:^|\.)(?:diffusion_model\.)?llm_adapter\.blocks\.(\d+)\.")
 
-MODE_AUTO_ANIMA = "自动识别 Anima LoRA"
-MODE_PROMPT_ALL = "提示词中的全部 LoRA"
-MODE_TARGETS = "仅目标列表"
+MODE_AUTO_ANIMA = "auto-anima"
+MODE_PROMPT_ALL = "prompt-all"
+MODE_TARGETS = "targets"
 TARGET_MODE_CHOICES = [MODE_AUTO_ANIMA, MODE_PROMPT_ALL, MODE_TARGETS]
-TARGET_MODE_EN = {
-    MODE_AUTO_ANIMA: "Auto-detect Anima LoRA",
-    MODE_PROMPT_ALL: "All LoRAs in prompt",
-    MODE_TARGETS: "Target list only",
+TARGET_MODE_LABELS = {
+    "en": {
+        MODE_AUTO_ANIMA: "Auto-detect Anima LoRA",
+        MODE_PROMPT_ALL: "All LoRAs in prompt",
+        MODE_TARGETS: "Target list only",
+    },
+    "ko": {
+        MODE_AUTO_ANIMA: "Anima LoRA 자동 감지",
+        MODE_PROMPT_ALL: "프롬프트의 모든 LoRA",
+        MODE_TARGETS: "대상 목록만",
+    },
 }
-TARGET_MODE_ALIASES = {value: key for key, value in TARGET_MODE_EN.items()}
+TARGET_MODE_ALIASES = {item: item for item in TARGET_MODE_CHOICES}
 
-STAGE_COMPOSITION = "构图阶段"
-STAGE_CHARACTER = "人物特征阶段"
-STAGE_STYLE = "画风阶段"
+STAGE_COMPOSITION = "composition"
+STAGE_CHARACTER = "character"
+STAGE_STYLE = "style"
 STAGE_CHOICES = [STAGE_COMPOSITION, STAGE_CHARACTER, STAGE_STYLE]
+STAGE_LABELS = {
+    "en": {
+        STAGE_COMPOSITION: "Composition stage",
+        STAGE_CHARACTER: "Character-feature stage",
+        STAGE_STYLE: "Style stage",
+    },
+    "ko": {
+        STAGE_COMPOSITION: "구도 단계",
+        STAGE_CHARACTER: "캐릭터 특징 단계",
+        STAGE_STYLE: "스타일 단계",
+    },
+}
+STAGE_ALIASES = {item: item for item in STAGE_CHOICES}
 
 PART_ALLOW = "allow"
 PART_BAN = "ban"
 
-PRESET_STYLE_ALLOW = "仅画风阶段介入"
-PRESET_COMPOSITION_ALLOW = "仅构图阶段介入"
-PRESET_CHARACTER_ALLOW = "仅人物特征阶段介入"
-PRESET_STYLE_BAN = "仅禁止画风阶段介入"
-PRESET_COMPOSITION_BAN = "仅禁止构图阶段"
-PRESET_CHARACTER_BAN = "仅禁止人物特征阶段"
+PRESET_STYLE_ALLOW = "style-stage"
+PRESET_COMPOSITION_ALLOW = "composition-stage"
+PRESET_CHARACTER_ALLOW = "character-feature-stage"
+PRESET_STYLE_BAN = "block-style-stage"
+PRESET_COMPOSITION_BAN = "block-composition-stage"
+PRESET_CHARACTER_BAN = "block-character-feature-stage"
 TEMPLATE_PRESET_CHOICES = [
     PRESET_STYLE_ALLOW,
     PRESET_COMPOSITION_ALLOW,
@@ -264,34 +374,67 @@ TEMPLATE_PRESET_CHOICES = [
     PRESET_COMPOSITION_BAN,
     PRESET_CHARACTER_BAN,
 ]
-BUILDER_PRESET_LABELS = {
-    PRESET_STYLE_ALLOW: "单画风阶段介入",
-    PRESET_COMPOSITION_ALLOW: "单构图阶段介入",
-    PRESET_CHARACTER_ALLOW: "单人物特征阶段介入",
-    PRESET_STYLE_BAN: "单禁止画风阶段介入",
-    PRESET_COMPOSITION_BAN: "单禁止构图阶段",
-    PRESET_CHARACTER_BAN: "单禁止人物特征阶段",
+PRESET_LABELS = {
+    "en": {
+        PRESET_STYLE_ALLOW: "Style stage only",
+        PRESET_COMPOSITION_ALLOW: "Composition stage only",
+        PRESET_CHARACTER_ALLOW: "Character-feature stage only",
+        PRESET_STYLE_BAN: "Block style stage",
+        PRESET_COMPOSITION_BAN: "Block composition stage",
+        PRESET_CHARACTER_BAN: "Block character-feature stage",
+    },
+    "ko": {
+        PRESET_STYLE_ALLOW: "스타일 단계만 적용",
+        PRESET_COMPOSITION_ALLOW: "구도 단계만 적용",
+        PRESET_CHARACTER_ALLOW: "캐릭터 특징 단계만 적용",
+        PRESET_STYLE_BAN: "스타일 단계 차단",
+        PRESET_COMPOSITION_BAN: "구도 단계 차단",
+        PRESET_CHARACTER_BAN: "캐릭터 특징 단계 차단",
+    },
 }
-BUILDER_PRESET_CHOICES = list(BUILDER_PRESET_LABELS.values())
-BUILDER_PRESET_NAMES = {value: key for key, value in BUILDER_PRESET_LABELS.items()}
+PRESET_ALIASES = {item: item for item in TEMPLATE_PRESET_CHOICES}
 
-CURVE_HOLD = "保持"
-CURVE_SMOOTH = "平滑淡入淡出"
-CURVE_TRIANGLE = "线性三角"
-CURVE_FRONT = "前强后弱"
-CURVE_BACK = "后强前弱"
+CURVE_HOLD = "hold"
+CURVE_SMOOTH = "smooth"
+CURVE_TRIANGLE = "triangle"
+CURVE_FRONT = "front-heavy"
+CURVE_BACK = "back-heavy"
 CURVE_CHOICES = [CURVE_SMOOTH, CURVE_HOLD, CURVE_TRIANGLE, CURVE_FRONT, CURVE_BACK]
-
-DISABLE_NONE = "不禁用"
-DISABLE_ALL = "禁用全部 LoRA"
-DISABLE_SELECTED = "禁用指定完整标签"
-DISABLE_CHOICES = [DISABLE_NONE, DISABLE_ALL, DISABLE_SELECTED]
-DISABLE_EN = {
-    DISABLE_NONE: "Do not disable",
-    DISABLE_ALL: "Disable all LoRAs",
-    DISABLE_SELECTED: "Disable listed full tags",
+CURVE_LABELS = {
+    "en": {
+        CURVE_SMOOTH: "Smooth fade",
+        CURVE_HOLD: "Hold",
+        CURVE_TRIANGLE: "Linear triangle",
+        CURVE_FRONT: "Front-heavy",
+        CURVE_BACK: "Back-heavy",
+    },
+    "ko": {
+        CURVE_SMOOTH: "부드러운 페이드",
+        CURVE_HOLD: "유지",
+        CURVE_TRIANGLE: "선형 삼각",
+        CURVE_FRONT: "앞쪽 강함",
+        CURVE_BACK: "뒤쪽 강함",
+    },
 }
-DISABLE_ALIASES = {value: key for key, value in DISABLE_EN.items()}
+CURVE_ALIASES = {item: item for item in CURVE_CHOICES}
+
+DISABLE_NONE = "none"
+DISABLE_ALL = "all"
+DISABLE_SELECTED = "selected"
+DISABLE_CHOICES = [DISABLE_NONE, DISABLE_ALL, DISABLE_SELECTED]
+DISABLE_LABELS = {
+    "en": {
+        DISABLE_NONE: "Do not disable",
+        DISABLE_ALL: "Disable all LoRAs",
+        DISABLE_SELECTED: "Disable listed full tags",
+    },
+    "ko": {
+        DISABLE_NONE: "비활성화하지 않음",
+        DISABLE_ALL: "모든 LoRA 비활성화",
+        DISABLE_SELECTED: "나열한 전체 태그 비활성화",
+    },
+}
+DISABLE_ALIASES = {item: item for item in DISABLE_CHOICES}
 
 STAGE_DEFAULT_CURVES = {
     STAGE_COMPOSITION: CURVE_FRONT,
@@ -306,6 +449,37 @@ PRESET_PARTS = {
     PRESET_STYLE_BAN: {"stage": STAGE_STYLE, "mode": PART_BAN},
     PRESET_COMPOSITION_BAN: {"stage": STAGE_COMPOSITION, "mode": PART_BAN},
     PRESET_CHARACTER_BAN: {"stage": STAGE_CHARACTER, "mode": PART_BAN},
+}
+
+BUILTIN_TEMPLATE_ANTI_STYLE_OVERFIT = "anti-style-overfit"
+TEMPLATE_LABELS = {
+    "en": {
+        PRESET_STYLE_ALLOW: "Style stage only",
+        PRESET_COMPOSITION_ALLOW: "Composition stage only",
+        PRESET_CHARACTER_ALLOW: "Character-feature stage only",
+        PRESET_STYLE_BAN: "Block style stage",
+        PRESET_COMPOSITION_BAN: "Block composition stage",
+        PRESET_CHARACTER_BAN: "Block character-feature stage",
+        BUILTIN_TEMPLATE_ANTI_STYLE_OVERFIT: "Anti-style overfit",
+    },
+    "ko": {
+        PRESET_STYLE_ALLOW: "스타일 단계만 적용",
+        PRESET_COMPOSITION_ALLOW: "구도 단계만 적용",
+        PRESET_CHARACTER_ALLOW: "캐릭터 특징 단계만 적용",
+        PRESET_STYLE_BAN: "스타일 단계 차단",
+        PRESET_COMPOSITION_BAN: "구도 단계 차단",
+        PRESET_CHARACTER_BAN: "캐릭터 특징 단계 차단",
+        BUILTIN_TEMPLATE_ANTI_STYLE_OVERFIT: "스타일 과적합 방지",
+    },
+}
+TEMPLATE_ALIASES = {
+    PRESET_STYLE_ALLOW: PRESET_STYLE_ALLOW,
+    PRESET_COMPOSITION_ALLOW: PRESET_COMPOSITION_ALLOW,
+    PRESET_CHARACTER_ALLOW: PRESET_CHARACTER_ALLOW,
+    PRESET_STYLE_BAN: PRESET_STYLE_BAN,
+    PRESET_COMPOSITION_BAN: PRESET_COMPOSITION_BAN,
+    PRESET_CHARACTER_BAN: PRESET_CHARACTER_BAN,
+    BUILTIN_TEMPLATE_ANTI_STYLE_OVERFIT: BUILTIN_TEMPLATE_ANTI_STYLE_OVERFIT,
 }
 
 BUILTIN_TEMPLATES = {
@@ -370,6 +544,81 @@ BUILTIN_TEMPLATES = {
         "curve": CURVE_SMOOTH,
     },
 }
+
+for labels in (TARGET_MODE_LABELS, STAGE_LABELS, PRESET_LABELS, CURVE_LABELS, DISABLE_LABELS, TEMPLATE_LABELS):
+    for values in labels.values():
+        for canonical, label in values.items():
+            target = canonical
+            if labels is TARGET_MODE_LABELS:
+                TARGET_MODE_ALIASES[label] = canonical
+                TARGET_MODE_ALIASES[label.lower()] = canonical
+            elif labels is STAGE_LABELS:
+                STAGE_ALIASES[label] = canonical
+                STAGE_ALIASES[label.lower()] = canonical
+            elif labels is PRESET_LABELS:
+                PRESET_ALIASES[label] = canonical
+                PRESET_ALIASES[label.lower()] = canonical
+            elif labels is CURVE_LABELS:
+                CURVE_ALIASES[label] = canonical
+                CURVE_ALIASES[label.lower()] = canonical
+            elif labels is DISABLE_LABELS:
+                DISABLE_ALIASES[label] = canonical
+                DISABLE_ALIASES[label.lower()] = canonical
+            elif labels is TEMPLATE_LABELS:
+                TEMPLATE_ALIASES[label] = target
+                TEMPLATE_ALIASES[label.lower()] = target
+
+_LEGACY_TARGET_MODE_ALIASES = {
+    "\u81ea\u52a8\u8bc6\u522b Anima LoRA": MODE_AUTO_ANIMA,
+    "\u63d0\u793a\u8bcd\u4e2d\u7684\u5168\u90e8 LoRA": MODE_PROMPT_ALL,
+    "\u4ec5\u76ee\u6807\u5217\u8868": MODE_TARGETS,
+}
+_LEGACY_STAGE_ALIASES = {
+    "\u6784\u56fe\u9636\u6bb5": STAGE_COMPOSITION,
+    "\u4eba\u7269\u7279\u5f81\u9636\u6bb5": STAGE_CHARACTER,
+    "\u753b\u98ce\u9636\u6bb5": STAGE_STYLE,
+}
+_LEGACY_PRESET_ALIASES = {
+    "\u4ec5\u753b\u98ce\u9636\u6bb5\u4ecb\u5165": PRESET_STYLE_ALLOW,
+    "\u4ec5\u6784\u56fe\u9636\u6bb5\u4ecb\u5165": PRESET_COMPOSITION_ALLOW,
+    "\u4ec5\u4eba\u7269\u7279\u5f81\u9636\u6bb5\u4ecb\u5165": PRESET_CHARACTER_ALLOW,
+    "\u4ec5\u7981\u6b62\u753b\u98ce\u9636\u6bb5\u4ecb\u5165": PRESET_STYLE_BAN,
+    "\u4ec5\u7981\u6b62\u6784\u56fe\u9636\u6bb5": PRESET_COMPOSITION_BAN,
+    "\u4ec5\u7981\u6b62\u4eba\u7269\u7279\u5f81\u9636\u6bb5": PRESET_CHARACTER_BAN,
+    "\u5355\u753b\u98ce\u9636\u6bb5\u4ecb\u5165": PRESET_STYLE_ALLOW,
+    "\u5355\u6784\u56fe\u9636\u6bb5\u4ecb\u5165": PRESET_COMPOSITION_ALLOW,
+    "\u5355\u4eba\u7269\u7279\u5f81\u9636\u6bb5\u4ecb\u5165": PRESET_CHARACTER_ALLOW,
+    "\u5355\u7981\u6b62\u753b\u98ce\u9636\u6bb5\u4ecb\u5165": PRESET_STYLE_BAN,
+    "\u5355\u7981\u6b62\u6784\u56fe\u9636\u6bb5": PRESET_COMPOSITION_BAN,
+    "\u5355\u7981\u6b62\u4eba\u7269\u7279\u5f81\u9636\u6bb5": PRESET_CHARACTER_BAN,
+}
+_LEGACY_CURVE_ALIASES = {
+    "\u4fdd\u6301": CURVE_HOLD,
+    "\u5e73\u6ed1\u6de1\u5165\u6de1\u51fa": CURVE_SMOOTH,
+    "\u7ebf\u6027\u4e09\u89d2": CURVE_TRIANGLE,
+    "\u524d\u5f3a\u540e\u5f31": CURVE_FRONT,
+    "\u540e\u5f3a\u524d\u5f31": CURVE_BACK,
+}
+_LEGACY_DISABLE_ALIASES = {
+    "\u4e0d\u7981\u7528": DISABLE_NONE,
+    "\u7981\u7528\u5168\u90e8 LoRA": DISABLE_ALL,
+    "\u7981\u7528\u6307\u5b9a\u5b8c\u6574\u6807\u7b7e": DISABLE_SELECTED,
+}
+_LEGACY_TEMPLATE_ALIASES = {
+    **_LEGACY_PRESET_ALIASES,
+    "\u9632\u753b\u98ce\u8fc7\u62df\u5408": BUILTIN_TEMPLATE_ANTI_STYLE_OVERFIT,
+}
+for alias_map, target_map in [
+    (_LEGACY_TARGET_MODE_ALIASES, TARGET_MODE_ALIASES),
+    (_LEGACY_STAGE_ALIASES, STAGE_ALIASES),
+    (_LEGACY_PRESET_ALIASES, PRESET_ALIASES),
+    (_LEGACY_CURVE_ALIASES, CURVE_ALIASES),
+    (_LEGACY_DISABLE_ALIASES, DISABLE_ALIASES),
+    (_LEGACY_TEMPLATE_ALIASES, TEMPLATE_ALIASES),
+]:
+    for legacy, canonical in alias_map.items():
+        target_map.setdefault(legacy, canonical)
+        target_map.setdefault(legacy.lower(), canonical)
 
 _ACTIVE_STATE = None
 _ORIGINAL_ADD_PATCHES = None
@@ -740,7 +989,7 @@ def _parse_lora_template_overrides(text) -> dict[str, str]:
             logger.warning("Ignored invalid Anima per-LoRA template line: %s", line)
             continue
 
-        template_name = right.strip()
+        template_name = _normalize_template_name(right.strip())
         if template_name not in templates:
             logger.warning("Ignored unknown Anima per-LoRA template: %s", template_name)
             continue
@@ -762,7 +1011,12 @@ def _load_custom_templates() -> dict:
     try:
         with TEMPLATE_FILE.open("r", encoding="utf-8") as f:
             data = json.load(f)
-        return data if isinstance(data, dict) else {}
+        if not isinstance(data, dict):
+            return {}
+        migrated, changed = _migrate_template_data(data)
+        if changed:
+            _save_custom_templates(migrated)
+        return migrated
     except Exception:
         logger.exception("Failed to read Anima LoRA stage templates")
         return {}
@@ -777,43 +1031,96 @@ def _save_custom_templates(data: dict):
 def _template_names() -> list[str]:
     names = list(BUILTIN_TEMPLATES.keys())
     for name in _load_custom_templates():
-        if name not in names:
-            names.append(name)
+        logical_name = _normalize_template_name(name)
+        if logical_name not in names:
+            names.append(logical_name)
     return names
 
 
+def _template_choice_names() -> list[str]:
+    return [_display_template_name(name) for name in _template_names()]
+
+
 def _template_dropdown_update(value=None):
-    choices = _template_names()
-    if value not in choices:
-        value = choices[0] if choices else None
-    return gr.update(choices=choices, value=value)
+    choices = _template_choice_names()
+    logical_value = _normalize_template_name(value)
+    names = _template_names()
+    if logical_value not in names:
+        logical_value = names[0] if names else None
+    display_value = _display_template_name(logical_value) if logical_value else None
+    return gr.update(choices=choices, value=display_value)
 
 
 def _template_config(name: str) -> dict:
+    name = _normalize_template_name(name)
     if name in BUILTIN_TEMPLATES:
         return dict(BUILTIN_TEMPLATES[name])
     data = _load_custom_templates()
-    value = data.get(str(name or ""), {})
+    value = data.get(name, {})
     return dict(value) if isinstance(value, dict) else {}
 
 
 def _normalize_template_part(part) -> dict | None:
     if isinstance(part, str):
-        part = PRESET_PARTS.get(part) or PRESET_PARTS.get(BUILDER_PRESET_NAMES.get(part, ""))
+        part = PRESET_PARTS.get(_normalize_preset_name(part))
     if not isinstance(part, dict):
         return None
 
-    stage = part.get("stage")
+    stage = _normalize_stage(part.get("stage"), None)
     mode = part.get("mode", PART_ALLOW)
     if stage not in STAGE_CHOICES or mode not in {PART_ALLOW, PART_BAN}:
         return None
+    curve = _normalize_curve(part.get("curve") or STAGE_DEFAULT_CURVES.get(stage, CURVE_SMOOTH))
 
     return {
         "stage": stage,
         "mode": mode,
-        "curve": part.get("curve") if part.get("curve") in CURVE_CHOICES else STAGE_DEFAULT_CURVES.get(stage, CURVE_SMOOTH),
+        "curve": curve if curve in CURVE_CHOICES else STAGE_DEFAULT_CURVES.get(stage, CURVE_SMOOTH),
         "strength": _clamp(_to_float(part.get("strength", 1.0), 1.0), 0.0, 4.0),
     }
+
+
+def _normalize_template_config(config: dict) -> dict:
+    normalized = dict(config)
+    stage = _normalize_stage(normalized.get("stage"), STAGE_CHARACTER)
+    normalized["stage"] = stage if stage in STAGE_CHOICES else STAGE_CHARACTER
+    normalized["curve"] = _normalize_curve(normalized.get("curve") or STAGE_DEFAULT_CURVES.get(normalized["stage"], CURVE_SMOOTH))
+    parts = _template_parts(normalized)
+    if parts:
+        normalized["parts"] = parts
+    elif "parts" in normalized:
+        normalized.pop("parts", None)
+    return normalized
+
+
+def _migrate_template_data(data: dict) -> tuple[dict, bool]:
+    migrated = {}
+    changed = False
+    custom_index = 1
+    for raw_name, raw_config in data.items():
+        name = _normalize_template_name(raw_name)
+        if _contains_han(name):
+            name = ""
+        if not name or name in BUILTIN_TEMPLATES:
+            while f"custom-template-{custom_index}" in migrated:
+                custom_index += 1
+            name = f"custom-template-{custom_index}"
+            custom_index += 1
+            changed = True
+        if name != raw_name:
+            changed = True
+        if name in migrated:
+            while f"custom-template-{custom_index}" in migrated:
+                custom_index += 1
+            name = f"custom-template-{custom_index}"
+            custom_index += 1
+            changed = True
+
+        config = _normalize_template_config(raw_config) if isinstance(raw_config, dict) else {}
+        if config != raw_config:
+            changed = True
+        migrated[name] = config
+    return migrated, changed
 
 
 def _part_preset_display_name(part: dict) -> str:
@@ -821,7 +1128,7 @@ def _part_preset_display_name(part: dict) -> str:
     if not normalized:
         return ""
     canonical = _part_preset_name(normalized)
-    return BUILDER_PRESET_LABELS.get(canonical, canonical)
+    return _display_preset(canonical)
 
 
 def _template_parts(config: dict) -> list[dict]:
@@ -843,9 +1150,10 @@ def _part_preset_name(part: dict) -> str:
 
 
 def _stage_from_template_value(value, fallback=STAGE_CHARACTER) -> str:
-    if value in STAGE_CHOICES:
-        return value
-    part = PRESET_PARTS.get(str(value or ""))
+    stage = _normalize_stage(value, None)
+    if stage in STAGE_CHOICES:
+        return stage
+    part = PRESET_PARTS.get(_normalize_preset_name(value))
     if part:
         return part["stage"]
     return fallback
@@ -858,8 +1166,9 @@ def _primary_template_part(config: dict, fallback_stage=STAGE_CHARACTER) -> dict
             return part
     if parts:
         return parts[0]
-    stage = config.get("stage") if config.get("stage") in STAGE_CHOICES else fallback_stage
-    return {"stage": stage, "mode": PART_ALLOW, "curve": config.get("curve", STAGE_DEFAULT_CURVES.get(stage, CURVE_SMOOTH)), "strength": _to_float(config.get("strength", 1.0), 1.0)}
+    stage = _normalize_stage(config.get("stage"), fallback_stage)
+    curve = _normalize_curve(config.get("curve") or STAGE_DEFAULT_CURVES.get(stage, CURVE_SMOOTH))
+    return {"stage": stage, "mode": PART_ALLOW, "curve": curve, "strength": _to_float(config.get("strength", 1.0), 1.0)}
 
 
 def _template_preset_value(config: dict) -> str:
@@ -874,18 +1183,18 @@ def _template_preset_value(config: dict) -> str:
 def _parts_from_presets(presets) -> tuple[list[dict], str | None]:
     selected = [str(item).strip() for item in (presets or []) if str(item).strip()]
     if not selected:
-        return [], "请选择至少一个基础预设。"
+        return [], _t("preset_required")
 
     stages = {}
     parts = []
     for preset in selected:
         part = _normalize_template_part(preset)
         if part is None:
-            return [], f"未知基础预设：{preset}"
+            return [], _t("unknown_preset").format(preset=preset)
         stage_modes = stages.setdefault(part["stage"], set())
         opposite = PART_BAN if part["mode"] == PART_ALLOW else PART_ALLOW
         if opposite in stage_modes:
-            return [], f"组合冲突：{part['stage']} 同时选择了介入和禁止，无法保存。"
+            return [], _t("combo_conflict").format(stage=_display_stage(part["stage"]))
         stage_modes.add(part["mode"])
         parts.append(part)
 
@@ -903,7 +1212,7 @@ def _presets_from_template(name: str) -> list[str]:
 
 
 def _builder_presets_from_template(name: str) -> list[str]:
-    return [BUILDER_PRESET_LABELS.get(preset, preset) for preset in _presets_from_template(name)]
+    return [_display_preset(preset) for preset in _presets_from_template(name)]
 
 
 def _template_stage_from_name(name: str, fallback=STAGE_CHARACTER) -> str:
@@ -914,6 +1223,7 @@ def _template_stage_from_name(name: str, fallback=STAGE_CHARACTER) -> str:
 
 
 def _auto_stage_values(stage: str, shift_value) -> tuple[float, float, float, float]:
+    stage = _normalize_stage(stage, STAGE_CHARACTER)
     shift = _clamp(_to_float(shift_value, 3.0), 1.0, 24.0)
     # Shift 3.0 is Forge's common default. Higher Shift usually keeps useful
     # structure later in the denoise path, so template windows move slightly later.
@@ -942,9 +1252,7 @@ def _apply_template_ui(template_name, shift_value):
     config = _template_config(template_name)
     primary_part = _primary_template_part(config)
     auto = bool(config.get("auto", True))
-    curve = config.get("curve") or primary_part.get("curve") or CURVE_SMOOTH
-    if curve not in CURVE_CHOICES:
-        curve = CURVE_SMOOTH
+    curve = _normalize_curve(config.get("curve") or primary_part.get("curve") or CURVE_SMOOTH)
 
     if auto:
         start, end, peak, strength = _auto_stage_values(primary_part["stage"], shift_value)
@@ -962,7 +1270,7 @@ def _apply_template_ui(template_name, shift_value):
         gr.update(value=round(end, 4)),
         gr.update(value=round(peak, 4)),
         gr.update(value=round(strength, 4)),
-        gr.update(value=curve),
+        gr.update(value=_display_curve(curve)),
     )
 
 
@@ -983,14 +1291,14 @@ def _auto_timing_ui(template_name, shift_value, auto, start, end, peak, strength
 
 def _save_template_ui(name, auto, template_name, start, end, peak, strength, curve):
     name = str(name or "").strip()
-    choices = _template_names()
     if not name:
-        return _template_dropdown_update(), _template_dropdown_update(), _template_dropdown_update(), "模板名称不能为空。"
-    if name in BUILTIN_TEMPLATES:
-        return _template_dropdown_update(name), _template_dropdown_update(name), _template_dropdown_update(name), "内置模板不能覆盖，请换一个名称。"
+        return _template_dropdown_update(), _template_dropdown_update(), _template_dropdown_update(), _t("template_name_required")
+    logical_name = _normalize_template_name(name)
+    if logical_name in BUILTIN_TEMPLATES:
+        return _template_dropdown_update(logical_name), _template_dropdown_update(logical_name), _template_dropdown_update(logical_name), _t("builtin_template_locked")
 
     data = _load_custom_templates()
-    template_name = str(template_name or "").strip()
+    template_name = _normalize_template_name(template_name)
     stage = _template_stage_from_name(template_name)
     source_parts = _template_parts(_template_config(template_name))
     data[name] = {
@@ -1000,21 +1308,21 @@ def _save_template_ui(name, auto, template_name, start, end, peak, strength, cur
         "end": _clamp(_to_float(end), 0.0, 1.0),
         "peak": _clamp(_to_float(peak), 0.0, 1.0),
         "strength": _clamp(_to_float(strength, 1.0), 0.0, 4.0),
-        "curve": curve if curve in CURVE_CHOICES else CURVE_SMOOTH,
+        "curve": _normalize_curve(curve),
     }
     if source_parts:
         data[name]["parts"] = source_parts
     _save_custom_templates(data)
-    return _template_dropdown_update(name), _template_dropdown_update(name), _template_dropdown_update(name), f"已保存模板：{name}"
+    return _template_dropdown_update(name), _template_dropdown_update(name), _template_dropdown_update(name), _t("template_saved").format(name=name)
 
 
 def _save_preset_combo_template_ui(name, selected_presets, shift_value=3.0):
     name = str(name or "").strip()
-    choices = _template_names()
     if not name:
-        return _template_dropdown_update(), _template_dropdown_update(), _template_dropdown_update(), "模板名称不能为空。"
-    if name in BUILTIN_TEMPLATES:
-        return _template_dropdown_update(name), _template_dropdown_update(name), _template_dropdown_update(name), "内置基础预设不能覆盖，请换一个名称。"
+        return _template_dropdown_update(), _template_dropdown_update(), _template_dropdown_update(), _t("template_name_required")
+    logical_name = _normalize_template_name(name)
+    if logical_name in BUILTIN_TEMPLATES:
+        return _template_dropdown_update(logical_name), _template_dropdown_update(logical_name), _template_dropdown_update(logical_name), _t("builtin_preset_locked")
 
     parts, error = _parts_from_presets(selected_presets)
     if error:
@@ -1036,12 +1344,17 @@ def _save_preset_combo_template_ui(name, selected_presets, shift_value=3.0):
     _save_custom_templates(data)
     presets_text = " + ".join(_part_preset_display_name(part) for part in parts)
     preview = _preset_combo_preview_text(selected_presets, shift_value)
-    return _template_dropdown_update(name), _template_dropdown_update(name), _template_dropdown_update(name), f"已保存组合模板：{name} = {presets_text}\n\n{preview}"
+    return (
+        _template_dropdown_update(name),
+        _template_dropdown_update(name),
+        _template_dropdown_update(name),
+        _t("combo_saved").format(name=name, presets=presets_text, preview=preview),
+    )
 
 
 def _open_template_builder_ui(template_name, shift_value):
     presets = _builder_presets_from_template(template_name)
-    current = str(template_name or "").strip()
+    current = _normalize_template_name(template_name)
     default_name = "" if current in BUILTIN_TEMPLATES else current
     shift = _to_float(shift_value, 3.0)
     return (
@@ -1079,7 +1392,7 @@ def _preset_combo_preview_text(selected_presets, shift_value=3.0):
     for part in parts:
         start, end, peak, strength = _auto_stage_values(part["stage"], shift)
         action = _t("allow_action") if part["mode"] == PART_ALLOW else _t("ban_action")
-        curve = part.get("curve") if part.get("curve") in CURVE_CHOICES else STAGE_DEFAULT_CURVES.get(part["stage"], CURVE_SMOOTH)
+        curve = _normalize_curve(part.get("curve") or STAGE_DEFAULT_CURVES.get(part["stage"], CURVE_SMOOTH))
         part_strength = _clamp(_to_float(part.get("strength", strength), strength), 0.0, 4.0)
         if part["mode"] == PART_BAN:
             strength_text = _t("zero_in_window")
@@ -1093,7 +1406,7 @@ def _preset_combo_preview_text(selected_presets, shift_value=3.0):
                 end=_format_float(end),
                 peak=_format_float(peak),
                 strength=strength_text,
-                curve=curve,
+                curve=_display_curve(curve),
             )
         )
     return "\n".join(lines)
@@ -1115,12 +1428,12 @@ def _template_help_ui(template_name, shift_value):
     lines = [
         _t("help_title"),
         "",
-        "- 模板由基础预设组合而成；“介入”表示 LoRA 只在该阶段生效，“禁止”表示 LoRA 在该阶段强制为 0。" if _language() == "zh" else "- Templates are built from base presets. Apply means the LoRA is active only in that stage; Block forces it to 0 in that stage.",
-        "- 开启“根据 Shift 自动设置介入时间”时，每个基础预设都会按当前 Shift 自动移动开始、结束、峰值比例。" if _language() == "zh" else "- When auto timing from Shift is enabled, every base preset moves its start, end, and peak ratios from the current Shift value.",
-        "- 组合模板可混合多个阶段，但同一阶段不能同时选择“介入”和“禁止”。" if _language() == "zh" else "- Combo templates can mix stages, but the same stage cannot be both Apply and Block.",
-        "- 开始比例/结束比例是采样进度 0-1；峰值比例是介入曲线最强的位置；阶段强度倍率会乘到最终 LoRA 强度上。" if _language() == "zh" else "- Start/end are sampling progress ratios from 0 to 1; peak is the strongest point of the curve; stage strength multiplies the final LoRA strength.",
+        _t("help_line_templates"),
+        _t("help_line_shift"),
+        _t("help_line_combo"),
+        _t("help_line_ratios"),
         "",
-        f"{_t('current_template')}: `{template_name}`",
+        f"{_t('current_template')}: `{_display_template_name(template_name)}`",
         f"{_t('current_shift')}: `{_format_float(shift)}`",
         "",
         _t("template_parts"),
@@ -1128,50 +1441,63 @@ def _template_help_ui(template_name, shift_value):
     for part in parts:
         start, end, peak, strength = _auto_stage_values(part["stage"], shift)
         action = _t("allow_action") if part["mode"] == PART_ALLOW else _t("ban_action")
-        if _language() == "zh":
-            lines.append(f"- `{_part_preset_display_name(part)}`：{part['stage']} {action}，自动窗口 {_format_float(start)} - {_format_float(end)}，峰值 {_format_float(peak)}，强度 {_format_float(strength)}")
-        else:
-            lines.append(f"- `{_part_preset_display_name(part)}`: {part['stage']} {action}, auto window {_format_float(start)} - {_format_float(end)}, peak {_format_float(peak)}, strength {_format_float(strength)}")
+        lines.append(
+            _t("help_part_line").format(
+                preset=_part_preset_display_name(part),
+                stage=_display_stage(part["stage"]),
+                action=action,
+                start=_format_float(start),
+                end=_format_float(end),
+                peak=_format_float(peak),
+                strength=_format_float(strength),
+            )
+        )
 
     return gr.update(value="\n".join(lines), visible=True)
 
 
 def _rename_template_ui(old_name, new_name):
-    old_name = str(old_name or "").strip()
+    old_name = _normalize_template_name(old_name)
     new_name = str(new_name or "").strip()
     if not old_name:
-        return _template_dropdown_update(), _template_dropdown_update(), _template_dropdown_update(), "没有选择模板。"
+        return _template_dropdown_update(), _template_dropdown_update(), _template_dropdown_update(), _t("no_template_selected")
     if old_name in BUILTIN_TEMPLATES:
-        return _template_dropdown_update(old_name), _template_dropdown_update(old_name), _template_dropdown_update(old_name), "内置模板不能重命名。"
+        return _template_dropdown_update(old_name), _template_dropdown_update(old_name), _template_dropdown_update(old_name), _t("builtin_template_rename_locked")
     if not new_name:
-        return _template_dropdown_update(old_name), _template_dropdown_update(old_name), _template_dropdown_update(old_name), "新名称不能为空。"
-    if new_name in BUILTIN_TEMPLATES:
-        return _template_dropdown_update(old_name), _template_dropdown_update(old_name), _template_dropdown_update(old_name), "不能重命名为内置模板名称。"
+        return _template_dropdown_update(old_name), _template_dropdown_update(old_name), _template_dropdown_update(old_name), _t("new_name_required")
+    if _normalize_template_name(new_name) in BUILTIN_TEMPLATES:
+        return _template_dropdown_update(old_name), _template_dropdown_update(old_name), _template_dropdown_update(old_name), _t("builtin_name_forbidden")
     if new_name == old_name:
-        return _template_dropdown_update(new_name), _template_dropdown_update(new_name), _template_dropdown_update(new_name), "新旧名称相同，无需重命名。"
+        return _template_dropdown_update(new_name), _template_dropdown_update(new_name), _template_dropdown_update(new_name), _t("same_name")
 
     data = _load_custom_templates()
     if old_name not in data:
-        return _template_dropdown_update(old_name), _template_dropdown_update(old_name), _template_dropdown_update(old_name), "找不到要重命名的模板。"
+        return _template_dropdown_update(old_name), _template_dropdown_update(old_name), _template_dropdown_update(old_name), _t("template_missing")
     if new_name in data:
-        return _template_dropdown_update(old_name), _template_dropdown_update(old_name), _template_dropdown_update(old_name), "目标名称已存在。"
+        return _template_dropdown_update(old_name), _template_dropdown_update(old_name), _template_dropdown_update(old_name), _t("target_name_exists")
 
     data[new_name] = data.pop(old_name)
     _save_custom_templates(data)
-    return _template_dropdown_update(new_name), _template_dropdown_update(new_name), _template_dropdown_update(new_name), f"已重命名模板：{old_name} → {new_name}"
+    return (
+        _template_dropdown_update(new_name),
+        _template_dropdown_update(new_name),
+        _template_dropdown_update(new_name),
+        _t("template_renamed").format(old_name=old_name, new_name=new_name),
+    )
 
 
 def _delete_template_ui(name):
+    name = _normalize_template_name(name)
     if not name:
-        return _template_dropdown_update(), _template_dropdown_update(), _template_dropdown_update(), "没有选择模板。"
+        return _template_dropdown_update(), _template_dropdown_update(), _template_dropdown_update(), _t("no_template_selected")
     if name in BUILTIN_TEMPLATES:
-        return _template_dropdown_update(name), _template_dropdown_update(name), _template_dropdown_update(name), "内置模板不能删除。"
+        return _template_dropdown_update(name), _template_dropdown_update(name), _template_dropdown_update(name), _t("builtin_template_delete_locked")
 
     data = _load_custom_templates()
     if name in data:
         del data[name]
         _save_custom_templates(data)
-    return _template_dropdown_update(), _template_dropdown_update(), _template_dropdown_update(), f"已删除模板：{name}"
+    return _template_dropdown_update(), _template_dropdown_update(), _template_dropdown_update(), _t("template_deleted").format(name=name)
 
 
 def _layer_weight_module():
@@ -1300,6 +1626,7 @@ def _sampling_progress(step, total_steps) -> float:
 
 
 def _curve_factor_for_window(progress, start, end, peak, strength, curve) -> float:
+    curve = _normalize_curve(curve)
     start = _clamp(start, 0.0, 1.0)
     end = _clamp(end, 0.0, 1.0)
     if end < start:
@@ -1343,7 +1670,7 @@ def _stage_curve_factor(config, step, total_steps) -> float:
 
         for part in config.parts:
             start, end, peak, strength = _auto_stage_values(part["stage"], config.shift)
-            curve = part.get("curve") if part.get("curve") in CURVE_CHOICES else STAGE_DEFAULT_CURVES.get(part["stage"], CURVE_SMOOTH)
+            curve = _normalize_curve(part.get("curve") or STAGE_DEFAULT_CURVES.get(part["stage"], CURVE_SMOOTH))
             part_strength = _clamp(_to_float(part.get("strength", strength), strength), 0.0, 4.0)
 
             if part["mode"] == PART_BAN:
@@ -1389,14 +1716,13 @@ class PassConfig:
         return _parse_targets(self.target_loras)
 
     def finalize_timing(self):
+        self.template_name = _normalize_template_name(self.template_name)
         template = _template_config(self.template_name)
         self.parts = _template_parts(template)
-        stage = template.get("stage") or _stage_from_template_value(self.stage) or STAGE_CHARACTER
+        stage = _normalize_stage(template.get("stage") or _stage_from_template_value(self.stage), STAGE_CHARACTER)
         if self.parts:
             primary = next((part for part in self.parts if part["mode"] == PART_ALLOW), self.parts[0])
             stage = primary["stage"]
-        if stage not in STAGE_CHOICES:
-            stage = STAGE_CHARACTER
         self.stage = stage
 
         if self.auto_timing:
@@ -1409,15 +1735,14 @@ class PassConfig:
             self.peak = _clamp(_to_float(self.peak), self.start, self.end)
             self.stage_strength = _clamp(_to_float(self.stage_strength, 1.0), 0.0, 4.0)
 
-        if self.curve not in CURVE_CHOICES:
-            self.curve = CURVE_SMOOTH
+        self.curve = _normalize_curve(self.curve)
 
     def config_for_file(self, filename):
         names = _names_for_lora_file(filename)
         template_name = None
         for selector_name, selector_template in self.lora_templates.items():
             if selector_name in names:
-                template_name = selector_template
+                template_name = _normalize_template_name(selector_template)
                 break
 
         if not template_name or template_name == self.template_name:
@@ -1431,15 +1756,11 @@ class PassConfig:
         template = _template_config(template_name)
         auto_timing = bool(template.get("auto", self.auto_timing))
         parts = _template_parts(template)
-        stage = template.get("stage") or self.stage
+        stage = _normalize_stage(template.get("stage") or self.stage, self.stage)
         if parts:
             primary = next((part for part in parts if part["mode"] == PART_ALLOW), parts[0])
             stage = primary["stage"]
-        if stage not in STAGE_CHOICES:
-            stage = self.stage
-        curve = template.get("curve") or self.curve
-        if curve not in CURVE_CHOICES:
-            curve = self.curve
+        curve = _normalize_curve(template.get("curve") or self.curve)
         start = template.get("start", self.start) if not auto_timing else self.start
         end = template.get("end", self.end) if not auto_timing else self.end
         peak = template.get("peak", self.peak) if not auto_timing else self.peak
@@ -1581,11 +1902,12 @@ class RuntimeState:
 
 def _build_pass_config(target_mode, target_loras, panel_weight, template_name, lora_templates_text, auto_timing, stage, start, end, peak, stage_strength, curve, shift):
     target_mode = _normalize_target_mode(target_mode)
+    template_name = _normalize_template_name(template_name or next(iter(BUILTIN_TEMPLATES)))
     config = PassConfig(
         target_mode=target_mode,
         target_loras=str(target_loras or ""),
         panel_weight=_parse_panel_weight(panel_weight),
-        template_name=str(template_name or next(iter(BUILTIN_TEMPLATES))),
+        template_name=template_name,
         lora_templates_text=str(lora_templates_text or ""),
         lora_templates=_parse_lora_template_overrides(lora_templates_text),
         auto_timing=bool(auto_timing),
@@ -1595,7 +1917,7 @@ def _build_pass_config(target_mode, target_loras, panel_weight, template_name, l
         end=_to_float(end, 0.8),
         peak=_to_float(peak, 0.5),
         stage_strength=_to_float(stage_strength, 1.0),
-        curve=curve if curve in CURVE_CHOICES else CURVE_SMOOTH,
+        curve=_normalize_curve(curve),
         shift=_to_float(shift, 3.0),
     )
     config.finalize_timing()
@@ -1807,8 +2129,8 @@ class Script(scripts.Script):
             self.base_shift_component = component
 
     def _stage_panel(self, prefix: str, label: str, default_open: bool, default_target_mode=MODE_AUTO_ANIMA):
-        choices = _template_names()
-        default_template = choices[0] if choices else "仅人物特征阶段介入"
+        choices = _template_choice_names()
+        default_template = choices[0] if choices else _display_template_name(PRESET_CHARACTER_ALLOW)
 
         with gr.Accordion(label, open=default_open, elem_id=self.elem_id(f"{prefix}_panel")):
             with gr.Row():
@@ -1817,7 +2139,7 @@ class Script(scripts.Script):
                     label=_t("panel_weight"),
                     value="0",
                     lines=1,
-                    placeholder="0.8 或 0-18=1,19-27=0.2 或 blocks=0-18=1,19-27=0.2;modules=mlp=0.8",
+                    placeholder="0.8 or 0-18=1,19-27=0.2 or blocks=0-18=1,19-27=0.2;modules=mlp=0.8",
                     elem_id=self.elem_id(f"{prefix}_panel_weight"),
                 )
             target_loras = gr.Textbox(label=_t("target_lora"), value="", lines=1, placeholder=_t("target_lora_placeholder"), elem_id=self.elem_id(f"{prefix}_target_loras"))
@@ -1843,7 +2165,7 @@ class Script(scripts.Script):
 
             with gr.Row():
                 stage_strength = gr.Slider(0.0, 2.0, value=1.0, step=0.01, label=_t("strength"), elem_id=self.elem_id(f"{prefix}_stage_strength"))
-                curve = gr.Dropdown(label=_t("curve"), choices=CURVE_CHOICES, value=CURVE_SMOOTH, elem_id=self.elem_id(f"{prefix}_curve"))
+                curve = gr.Dropdown(label=_t("curve"), choices=_curve_choices(), value=_display_curve(CURVE_SMOOTH), elem_id=self.elem_id(f"{prefix}_curve"))
 
         return target_mode, target_loras, panel_weight, template, lora_templates, auto_timing, start, end, peak, stage_strength, curve, copy_template, help_template, open_builder
 
@@ -1906,7 +2228,7 @@ class Script(scripts.Script):
                     elem_id=self.elem_id("hr_disable_tags"),
                 )
 
-            template_choices = _template_names()
+            template_choices = _template_choice_names()
             manage_default = template_choices[0] if template_choices else None
             with gr.Accordion(_t("template_manager"), open=False, elem_id=self.elem_id("template_manager")):
                 with gr.Row():
@@ -1936,8 +2258,8 @@ class Script(scripts.Script):
                         builder_name = gr.Textbox(label=_t("template_name"), lines=1, elem_id=self.elem_id("builder_name"))
                         builder_presets = gr.CheckboxGroup(
                             label=_t("base_preset_combo"),
-                            choices=BUILDER_PRESET_CHOICES,
-                            value=[BUILDER_PRESET_LABELS[PRESET_CHARACTER_ALLOW]],
+                            choices=_builder_preset_choices(),
+                            value=[_display_preset(PRESET_CHARACTER_ALLOW)],
                             elem_id=self.elem_id("builder_presets"),
                         )
                         builder_shift = gr.Number(label=_t("preview_shift"), value=3.0, precision=4, elem_id=self.elem_id("builder_shift"))
@@ -2048,7 +2370,7 @@ class Script(scripts.Script):
             show_progress=False,
         )
         manage_template.change(
-            fn=lambda name: gr.update(value="" if str(name or "") in BUILTIN_TEMPLATES else str(name or "")),
+            fn=lambda name: gr.update(value="" if _normalize_template_name(name) in BUILTIN_TEMPLATES else _normalize_template_name(name)),
             inputs=[manage_template],
             outputs=[rename_template_name],
             show_progress=False,
